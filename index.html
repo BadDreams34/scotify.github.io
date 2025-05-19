@@ -38,7 +38,6 @@
         width: 150px;
         height: 150px;
         border-radius: 8px;
-        background-color: #eee;
       }
       .track-details {
         text-align: left;
@@ -64,12 +63,9 @@
         border-radius: 4px;
         cursor: pointer;
       }
-      #refreshButton:disabled {
-        background-color: #ccc;
-        cursor: not-allowed;
-      }
-      .loading {
-        opacity: 0.7;
+      #deviceInfo {
+        color: #666;
+        font-style: italic;
       }
     </style>
   </head>
@@ -104,7 +100,6 @@
         <p id="deviceInfo"></p>
       </div>
       <button id="refreshButton">Refresh</button>
-      <p id="statusMessage"></p>
     </section>
 
     <script src="spotify.js"></script>
