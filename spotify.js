@@ -3,19 +3,55 @@ const redirectUri = "https://baddreams34.github.io/scotify.github.io/";
 
 // DOM Elements
 const loginButton = document.getElementById("loginButton");
+const logoutButton = document.getElementById("logoutButton");
+const refreshButton = document.getElementById("refreshButton");
 const profileSection = document.getElementById("profile");
 const nowPlayingSection = document.getElementById("nowPlaying");
 const noTrackMessage = document.getElementById("noTrack");
 const trackInfo = document.getElementById("trackInfo");
 
+// Token management
+let accessToken = null;
+let refreshToken = null;
+let updateInterval = null;
+
 // Initialize the app
 document.addEventListener("DOMContentLoaded", () => {
   loginButton.addEventListener("click", handleLogin);
+  logoutButton.addEventListener("click", handleLogout);
+  refreshButton.addEventListener("click", () => {
+    if (accessToken) checkCurrentlyPlaying(accessToken);
+  });
   checkForAuthCode();
 });
 
 async function handleLogin() {
   await redirectToAuthCodeFlow(clientId);
+}
+
+function handleLogout() {
+  // Clear tokens and reset UI
+  accessToken = null;
+  refreshToken = null;
+  localStorage.removeItem("verifier");
+  
+  // Clear any ongoing intervals
+  if (updateInterval) {
+    clearInterval(updateInterval);
+    updateInterval = null;
+  }
+  
+  // Reset UI
+  profileSection.style.display = "none";
+  nowPlayingSection.style.display = "none";
+  loginButton.style.display = "block";
+  
+  // Clear profile data
+  document.getElementById("displayName").innerText = "";
+  const avatar = document.getElementById("avatar");
+  while (avatar.firstChild) {
+    avatar.removeChild(avatar.firstChild);
+  }
 }
 
 function checkForAuthCode() {
@@ -30,7 +66,10 @@ function checkForAuthCode() {
 
 async function processAuthCode(code) {
   try {
-    const accessToken = await getAccessToken(clientId, code);
+    const tokens = await getAccessToken(clientId, code);
+    accessToken = tokens.access_token;
+    refreshToken = tokens.refresh_token;
+    
     const profile = await fetchProfile(accessToken);
     populateUI(profile);
     profileSection.style.display = "block";
@@ -39,7 +78,7 @@ async function processAuthCode(code) {
 
     // Start checking for currently playing track
     checkCurrentlyPlaying(accessToken);
-    setInterval(() => checkCurrentlyPlaying(accessToken), 5000); // Update every 5 seconds
+    updateInterval = setInterval(() => checkCurrentlyPlaying(accessToken), 5000);
   } catch (error) {
     console.error("Error during authentication:", error);
     alert("Failed to authenticate with Spotify");
@@ -58,7 +97,7 @@ async function redirectToAuthCodeFlow(clientId) {
   params.append("redirect_uri", redirectUri);
   params.append(
     "scope",
-    "user-read-private user-read-email user-read-currently-playing user-read-playback-state",
+    "user-read-private user-read-email user-read-currently-playing user-read-playback-state"
   );
   params.append("code_challenge_method", "S256");
   params.append("code_challenge", challenge);
@@ -106,8 +145,41 @@ async function getAccessToken(clientId, code) {
     throw new Error(`HTTP error! status: ${result.status}`);
   }
 
-  const { access_token } = await result.json();
-  return access_token;
+  return await result.json();
+}
+
+async function refreshAccessToken() {
+  if (!refreshToken) {
+    console.error("No refresh token available");
+    return null;
+  }
+
+  const params = new URLSearchParams();
+  params.append("grant_type", "refresh_token");
+  params.append("refresh_token", refreshToken);
+  params.append("client_id", clientId);
+
+  try {
+    const result = await fetch("https://accounts.spotify.com/api/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params,
+    });
+
+    if (!result.ok) {
+      throw new Error(`HTTP error! status: ${result.status}`);
+    }
+
+    const tokens = await result.json();
+    accessToken = tokens.access_token;
+    if (tokens.refresh_token) {
+      refreshToken = tokens.refresh_token;
+    }
+    return accessToken;
+  } catch (error) {
+    console.error("Error refreshing token:", error);
+    return null;
+  }
 }
 
 async function fetchProfile(token) {
@@ -135,32 +207,50 @@ function populateUI(profile) {
 
 async function checkCurrentlyPlaying(token) {
   try {
-    const response = await fetch(
-      "https://api.spotify.com/v1/me/player/currently-playing?market=ES",
-      {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    );
+    // First try with the current token
+    let response = await fetchCurrentlyPlaying(token);
+    
+    // If unauthorized, try refreshing the token
+    if (response.status === 401) {
+      console.log("Token expired, attempting refresh...");
+      const newToken = await refreshAccessToken();
+      if (newToken) {
+        response = await fetchCurrentlyPlaying(newToken);
+      } else {
+        throw new Error("Failed to refresh token");
+      }
+    }
+
+    console.log("Response status:", response.status);
 
     if (response.status === 204) {
-      // No content - nothing is playing
+      console.log("No content response - nothing playing");
       noTrackMessage.style.display = "block";
       trackInfo.style.display = "none";
       return;
     }
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.log("Response not OK:", errorText);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const data = await response.json();
+    console.log("Currently playing data:", data);
     displayCurrentlyPlaying(data);
   } catch (error) {
     console.error("Error fetching currently playing track:", error);
     noTrackMessage.style.display = "block";
     trackInfo.style.display = "none";
   }
+}
+
+async function fetchCurrentlyPlaying(token) {
+  return await fetch("https://api.spotify.com/v1/me/player/currently-playing", {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}` },
+  });
 }
 
 function displayCurrentlyPlaying(data) {
