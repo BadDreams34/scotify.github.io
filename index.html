@@ -54,6 +54,15 @@
         border-radius: 5px;
         width: 0%;
       }
+      #refreshButton {
+        margin-top: 10px;
+        padding: 8px 16px;
+        background-color: #1db954;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
@@ -63,6 +72,7 @@
     <section id="profile" style="display: none">
       <h2>Logged in as <span id="displayName"></span></h2>
       <div id="avatar"></div>
+      <button id="logoutButton">Logout</button>
     </section>
 
     <section id="nowPlaying" style="display: none">
@@ -85,6 +95,7 @@
         <p id="progressTime"></p>
         <p id="deviceInfo"></p>
       </div>
+      <button id="refreshButton">Refresh</button>
     </section>
 
     <script src="spotify.js" type="module"></script>
