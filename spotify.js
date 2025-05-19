@@ -9,24 +9,29 @@ const profileSection = document.getElementById("profile");
 const nowPlayingSection = document.getElementById("nowPlaying");
 const noTrackMessage = document.getElementById("noTrack");
 const trackInfo = document.getElementById("trackInfo");
+const statusMessage = document.getElementById("statusMessage");
 
 // Token management
 let accessToken = null;
 let refreshToken = null;
 let updateInterval = null;
+let isRefreshing = false;
 
 // Initialize the app
 document.addEventListener("DOMContentLoaded", () => {
   loginButton.addEventListener("click", handleLogin);
   logoutButton.addEventListener("click", handleLogout);
-  refreshButton.addEventListener("click", () => {
-    if (accessToken) checkCurrentlyPlaying(accessToken);
-  });
+  refreshButton.addEventListener("click", handleRefresh);
   checkForAuthCode();
 });
 
 async function handleLogin() {
-  await redirectToAuthCodeFlow(clientId);
+  try {
+    await redirectToAuthCodeFlow(clientId);
+  } catch (error) {
+    console.error("Login error:", error);
+    showStatus("Failed to initiate login", true);
+  }
 }
 
 function handleLogout() {
@@ -34,24 +39,54 @@ function handleLogout() {
   accessToken = null;
   refreshToken = null;
   localStorage.removeItem("verifier");
-  
+
   // Clear any ongoing intervals
   if (updateInterval) {
     clearInterval(updateInterval);
     updateInterval = null;
   }
-  
+
   // Reset UI
   profileSection.style.display = "none";
   nowPlayingSection.style.display = "none";
   loginButton.style.display = "block";
-  
+
   // Clear profile data
   document.getElementById("displayName").innerText = "";
   const avatar = document.getElementById("avatar");
   while (avatar.firstChild) {
     avatar.removeChild(avatar.firstChild);
   }
+
+  showStatus("Logged out successfully");
+}
+
+async function handleRefresh() {
+  if (isRefreshing || !accessToken) return;
+
+  try {
+    isRefreshing = true;
+    refreshButton.disabled = true;
+    refreshButton.classList.add("loading");
+    showStatus("Refreshing...");
+
+    await checkCurrentlyPlaying(accessToken);
+  } catch (error) {
+    console.error("Refresh error:", error);
+    showStatus("Refresh failed", true);
+  } finally {
+    setTimeout(() => {
+      isRefreshing = false;
+      refreshButton.disabled = false;
+      refreshButton.classList.remove("loading");
+    }, 1000);
+  }
+}
+
+function showStatus(message, isError = false) {
+  statusMessage.textContent = message;
+  statusMessage.style.color = isError ? "red" : "green";
+  setTimeout(() => (statusMessage.textContent = ""), 3000);
 }
 
 function checkForAuthCode() {
@@ -66,10 +101,11 @@ function checkForAuthCode() {
 
 async function processAuthCode(code) {
   try {
+    showStatus("Authenticating...");
     const tokens = await getAccessToken(clientId, code);
     accessToken = tokens.access_token;
     refreshToken = tokens.refresh_token;
-    
+
     const profile = await fetchProfile(accessToken);
     populateUI(profile);
     profileSection.style.display = "block";
@@ -77,11 +113,15 @@ async function processAuthCode(code) {
     nowPlayingSection.style.display = "block";
 
     // Start checking for currently playing track
-    checkCurrentlyPlaying(accessToken);
-    updateInterval = setInterval(() => checkCurrentlyPlaying(accessToken), 5000);
+    await checkCurrentlyPlaying(accessToken);
+    updateInterval = setInterval(
+      () => checkCurrentlyPlaying(accessToken),
+      5000,
+    );
+    showStatus("Login successful!");
   } catch (error) {
-    console.error("Error during authentication:", error);
-    alert("Failed to authenticate with Spotify");
+    console.error("Authentication error:", error);
+    showStatus("Failed to authenticate", true);
   }
 }
 
@@ -97,7 +137,7 @@ async function redirectToAuthCodeFlow(clientId) {
   params.append("redirect_uri", redirectUri);
   params.append(
     "scope",
-    "user-read-private user-read-email user-read-currently-playing user-read-playback-state"
+    "user-read-private user-read-email user-read-currently-playing user-read-playback-state",
   );
   params.append("code_challenge_method", "S256");
   params.append("code_challenge", challenge);
@@ -142,6 +182,8 @@ async function getAccessToken(clientId, code) {
   });
 
   if (!result.ok) {
+    const error = await result.json();
+    console.error("Token error:", error);
     throw new Error(`HTTP error! status: ${result.status}`);
   }
 
@@ -167,6 +209,8 @@ async function refreshAccessToken() {
     });
 
     if (!result.ok) {
+      const error = await result.json();
+      console.error("Refresh token error:", error);
       throw new Error(`HTTP error! status: ${result.status}`);
     }
 
@@ -189,6 +233,8 @@ async function fetchProfile(token) {
   });
 
   if (!result.ok) {
+    const error = await result.json();
+    console.error("Profile error:", error);
     throw new Error(`HTTP error! status: ${result.status}`);
   }
 
@@ -196,12 +242,16 @@ async function fetchProfile(token) {
 }
 
 function populateUI(profile) {
-  document.getElementById("displayName").innerText = profile.display_name;
+  document.getElementById("displayName").innerText =
+    profile.display_name || "User";
 
-  if (profile.images && profile.images[0]) {
+  const avatar = document.getElementById("avatar");
+  if (profile.images?.[0]?.url) {
     const profileImage = new Image(200, 200);
     profileImage.src = profile.images[0].url;
-    document.getElementById("avatar").appendChild(profileImage);
+    avatar.appendChild(profileImage);
+  } else {
+    avatar.innerHTML = "<div>No profile image</div>";
   }
 }
 
@@ -209,7 +259,7 @@ async function checkCurrentlyPlaying(token) {
   try {
     // First try with the current token
     let response = await fetchCurrentlyPlaying(token);
-    
+
     // If unauthorized, try refreshing the token
     if (response.status === 401) {
       console.log("Token expired, attempting refresh...");
@@ -221,28 +271,32 @@ async function checkCurrentlyPlaying(token) {
       }
     }
 
-    console.log("Response status:", response.status);
-
     if (response.status === 204) {
-      console.log("No content response - nothing playing");
       noTrackMessage.style.display = "block";
       trackInfo.style.display = "none";
       return;
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.log("Response not OK:", errorText);
+      const error = await response.json();
+      console.error("Currently playing error:", error);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     const data = await response.json();
-    console.log("Currently playing data:", data);
+
+    if (!data?.item) {
+      noTrackMessage.style.display = "block";
+      trackInfo.style.display = "none";
+      return;
+    }
+
     displayCurrentlyPlaying(data);
   } catch (error) {
-    console.error("Error fetching currently playing track:", error);
+    console.error("Currently playing error:", error);
     noTrackMessage.style.display = "block";
     trackInfo.style.display = "none";
+    showStatus("Error fetching playback info", true);
   }
 }
 
@@ -254,35 +308,54 @@ async function fetchCurrentlyPlaying(token) {
 }
 
 function displayCurrentlyPlaying(data) {
+  // Validate data structure
+  if (!data?.item || !data?.device) {
+    console.error("Invalid data structure:", data);
+    noTrackMessage.style.display = "block";
+    trackInfo.style.display = "none";
+    return;
+  }
+
   noTrackMessage.style.display = "none";
   trackInfo.style.display = "block";
 
-  // Track info
-  document.getElementById("trackName").textContent = data.item.name;
-  document.getElementById("artistName").textContent = data.item.artists
-    .map((artist) => artist.name)
-    .join(", ");
-  document.getElementById("albumName").textContent = data.item.album.name;
+  // Track info with fallbacks
+  document.getElementById("trackName").textContent =
+    data.item.name || "Unknown Track";
+  document.getElementById("artistName").textContent =
+    data.item.artists?.map((artist) => artist.name).join(", ") ||
+    "Unknown Artist";
+  document.getElementById("albumName").textContent =
+    data.item.album?.name || "Unknown Album";
 
   // Album image
   const trackImage = document.getElementById("trackImage");
-  if (data.item.album.images && data.item.album.images.length > 0) {
+  if (data.item.album?.images?.[0]?.url) {
     trackImage.src = data.item.album.images[0].url;
+    trackImage.alt = `${data.item.album.name} cover`;
+  } else {
+    trackImage.src = "";
+    trackImage.alt = "No album art available";
   }
 
   // Progress bar
-  const progressPercent = (data.progress_ms / data.item.duration_ms) * 100;
-  document.getElementById("progressBar").style.width = `${progressPercent}%`;
+  if (data.progress_ms && data.item.duration_ms) {
+    const progressPercent = Math.min(
+      100,
+      (data.progress_ms / data.item.duration_ms) * 100,
+    );
+    document.getElementById("progressBar").style.width = `${progressPercent}%`;
 
-  // Time display
-  const progressTime = document.getElementById("progressTime");
-  const progressMinutes = Math.floor(data.progress_ms / 60000);
-  const progressSeconds = Math.floor((data.progress_ms % 60000) / 1000);
-  const durationMinutes = Math.floor(data.item.duration_ms / 60000);
-  const durationSeconds = Math.floor((data.item.duration_ms % 60000) / 1000);
-  progressTime.textContent = `${progressMinutes}:${progressSeconds.toString().padStart(2, "0")} / ${durationMinutes}:${durationSeconds.toString().padStart(2, "0")}`;
+    // Time display
+    const progressTime = document.getElementById("progressTime");
+    const progressMinutes = Math.floor(data.progress_ms / 60000);
+    const progressSeconds = Math.floor((data.progress_ms % 60000) / 1000);
+    const durationMinutes = Math.floor(data.item.duration_ms / 60000);
+    const durationSeconds = Math.floor((data.item.duration_ms % 60000) / 1000);
+    progressTime.textContent = `${progressMinutes}:${progressSeconds.toString().padStart(2, "0")} / ${durationMinutes}:${durationSeconds.toString().padStart(2, "0")}`;
+  }
 
   // Device info
   document.getElementById("deviceInfo").textContent =
-    `Playing on ${data.device.name} (${data.device.type})`;
+    `Playing on ${data.device?.name || "Unknown device"} (${data.device?.type || "Unknown type"})`;
 }
