@@ -1,9 +1,12 @@
-const clientId = "3126f61f8a594d72bdcba7d124c1fc58"; // Replace with your client ID
-const redirectUri = "https://baddreams34.github.io/scotify.github.io/"; // Must match Spotify Dashboard
+const clientId = "3126f61f8a594d72bdcba7d124c1fc58";
+const redirectUri = "https://baddreams34.github.io/scotify.github.io/";
 
 // DOM Elements
 const loginButton = document.getElementById("loginButton");
 const profileSection = document.getElementById("profile");
+const nowPlayingSection = document.getElementById("nowPlaying");
+const noTrackMessage = document.getElementById("noTrack");
+const trackInfo = document.getElementById("trackInfo");
 
 // Initialize the app
 document.addEventListener("DOMContentLoaded", () => {
@@ -20,7 +23,6 @@ function checkForAuthCode() {
   const code = params.get("code");
 
   if (code) {
-    // Remove code from URL
     window.history.replaceState({}, document.title, window.location.pathname);
     processAuthCode(code);
   }
@@ -33,6 +35,11 @@ async function processAuthCode(code) {
     populateUI(profile);
     profileSection.style.display = "block";
     loginButton.style.display = "none";
+    nowPlayingSection.style.display = "block";
+
+    // Start checking for currently playing track
+    checkCurrentlyPlaying(accessToken);
+    setInterval(() => checkCurrentlyPlaying(accessToken), 5000); // Update every 5 seconds
   } catch (error) {
     console.error("Error during authentication:", error);
     alert("Failed to authenticate with Spotify");
@@ -49,7 +56,10 @@ async function redirectToAuthCodeFlow(clientId) {
   params.append("client_id", clientId);
   params.append("response_type", "code");
   params.append("redirect_uri", redirectUri);
-  params.append("scope", "user-read-private user-read-email");
+  params.append(
+    "scope",
+    "user-read-private user-read-email user-read-currently-playing user-read-playback-state",
+  );
   params.append("code_challenge_method", "S256");
   params.append("code_challenge", challenge);
 
@@ -120,15 +130,69 @@ function populateUI(profile) {
     const profileImage = new Image(200, 200);
     profileImage.src = profile.images[0].url;
     document.getElementById("avatar").appendChild(profileImage);
-    document.getElementById("imgUrl").innerText = profile.images[0].url;
+  }
+}
+
+async function checkCurrentlyPlaying(token) {
+  try {
+    const response = await fetch(
+      "https://api.spotify.com/v1/me/player/currently-playing?market=ES",
+      {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (response.status === 204) {
+      // No content - nothing is playing
+      noTrackMessage.style.display = "block";
+      trackInfo.style.display = "none";
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    displayCurrentlyPlaying(data);
+  } catch (error) {
+    console.error("Error fetching currently playing track:", error);
+    noTrackMessage.style.display = "block";
+    trackInfo.style.display = "none";
+  }
+}
+
+function displayCurrentlyPlaying(data) {
+  noTrackMessage.style.display = "none";
+  trackInfo.style.display = "block";
+
+  // Track info
+  document.getElementById("trackName").textContent = data.item.name;
+  document.getElementById("artistName").textContent = data.item.artists
+    .map((artist) => artist.name)
+    .join(", ");
+  document.getElementById("albumName").textContent = data.item.album.name;
+
+  // Album image
+  const trackImage = document.getElementById("trackImage");
+  if (data.item.album.images && data.item.album.images.length > 0) {
+    trackImage.src = data.item.album.images[0].url;
   }
 
-  document.getElementById("id").innerText = profile.id;
-  document.getElementById("email").innerText = profile.email || "Not provided";
-  document.getElementById("uri").innerText = profile.uri;
-  document
-    .getElementById("uri")
-    .setAttribute("href", profile.external_urls.spotify);
-  document.getElementById("url").innerText = profile.href;
-  document.getElementById("url").setAttribute("href", profile.href);
+  // Progress bar
+  const progressPercent = (data.progress_ms / data.item.duration_ms) * 100;
+  document.getElementById("progressBar").style.width = `${progressPercent}%`;
+
+  // Time display
+  const progressTime = document.getElementById("progressTime");
+  const progressMinutes = Math.floor(data.progress_ms / 60000);
+  const progressSeconds = Math.floor((data.progress_ms % 60000) / 1000);
+  const durationMinutes = Math.floor(data.item.duration_ms / 60000);
+  const durationSeconds = Math.floor((data.item.duration_ms % 60000) / 1000);
+  progressTime.textContent = `${progressMinutes}:${progressSeconds.toString().padStart(2, "0")} / ${durationMinutes}:${durationSeconds.toString().padStart(2, "0")}`;
+
+  // Device info
+  document.getElementById("deviceInfo").textContent =
+    `Playing on ${data.device.name} (${data.device.type})`;
 }
