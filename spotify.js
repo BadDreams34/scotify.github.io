@@ -9,13 +9,11 @@ const profileSection = document.getElementById("profile");
 const nowPlayingSection = document.getElementById("nowPlaying");
 const noTrackMessage = document.getElementById("noTrack");
 const trackInfo = document.getElementById("trackInfo");
-const statusMessage = document.getElementById("statusMessage");
 
 // Token management
 let accessToken = null;
 let refreshToken = null;
 let updateInterval = null;
-let isRefreshing = false;
 
 // Initialize the app
 document.addEventListener("DOMContentLoaded", () => {
@@ -26,12 +24,7 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 async function handleLogin() {
-  try {
-    await redirectToAuthCodeFlow(clientId);
-  } catch (error) {
-    console.error("Login error:", error);
-    showStatus("Failed to initiate login", true);
-  }
+  await redirectToAuthCodeFlow(clientId);
 }
 
 function handleLogout() {
@@ -57,36 +50,12 @@ function handleLogout() {
   while (avatar.firstChild) {
     avatar.removeChild(avatar.firstChild);
   }
-
-  showStatus("Logged out successfully");
 }
 
 async function handleRefresh() {
-  if (isRefreshing || !accessToken) return;
-
-  try {
-    isRefreshing = true;
-    refreshButton.disabled = true;
-    refreshButton.classList.add("loading");
-    showStatus("Refreshing...");
-
+  if (accessToken) {
     await checkCurrentlyPlaying(accessToken);
-  } catch (error) {
-    console.error("Refresh error:", error);
-    showStatus("Refresh failed", true);
-  } finally {
-    setTimeout(() => {
-      isRefreshing = false;
-      refreshButton.disabled = false;
-      refreshButton.classList.remove("loading");
-    }, 1000);
   }
-}
-
-function showStatus(message, isError = false) {
-  statusMessage.textContent = message;
-  statusMessage.style.color = isError ? "red" : "green";
-  setTimeout(() => (statusMessage.textContent = ""), 3000);
 }
 
 function checkForAuthCode() {
@@ -101,7 +70,6 @@ function checkForAuthCode() {
 
 async function processAuthCode(code) {
   try {
-    showStatus("Authenticating...");
     const tokens = await getAccessToken(clientId, code);
     accessToken = tokens.access_token;
     refreshToken = tokens.refresh_token;
@@ -118,10 +86,9 @@ async function processAuthCode(code) {
       () => checkCurrentlyPlaying(accessToken),
       5000,
     );
-    showStatus("Login successful!");
   } catch (error) {
-    console.error("Authentication error:", error);
-    showStatus("Failed to authenticate", true);
+    console.error("Error during authentication:", error);
+    alert("Failed to authenticate with Spotify");
   }
 }
 
@@ -182,8 +149,6 @@ async function getAccessToken(clientId, code) {
   });
 
   if (!result.ok) {
-    const error = await result.json();
-    console.error("Token error:", error);
     throw new Error(`HTTP error! status: ${result.status}`);
   }
 
@@ -209,8 +174,6 @@ async function refreshAccessToken() {
     });
 
     if (!result.ok) {
-      const error = await result.json();
-      console.error("Refresh token error:", error);
       throw new Error(`HTTP error! status: ${result.status}`);
     }
 
@@ -233,8 +196,6 @@ async function fetchProfile(token) {
   });
 
   if (!result.ok) {
-    const error = await result.json();
-    console.error("Profile error:", error);
     throw new Error(`HTTP error! status: ${result.status}`);
   }
 
@@ -242,32 +203,23 @@ async function fetchProfile(token) {
 }
 
 function populateUI(profile) {
-  document.getElementById("displayName").innerText =
-    profile.display_name || "User";
+  document.getElementById("displayName").innerText = profile.display_name;
 
-  const avatar = document.getElementById("avatar");
-  if (profile.images?.[0]?.url) {
+  if (profile.images && profile.images[0]) {
     const profileImage = new Image(200, 200);
     profileImage.src = profile.images[0].url;
-    avatar.appendChild(profileImage);
-  } else {
-    avatar.innerHTML = "<div>No profile image</div>";
+    document.getElementById("avatar").appendChild(profileImage);
   }
 }
 
 async function checkCurrentlyPlaying(token) {
   try {
-    // First try with the current token
     let response = await fetchCurrentlyPlaying(token);
 
-    // If unauthorized, try refreshing the token
     if (response.status === 401) {
-      console.log("Token expired, attempting refresh...");
       const newToken = await refreshAccessToken();
       if (newToken) {
         response = await fetchCurrentlyPlaying(newToken);
-      } else {
-        throw new Error("Failed to refresh token");
       }
     }
 
@@ -278,8 +230,6 @@ async function checkCurrentlyPlaying(token) {
     }
 
     if (!response.ok) {
-      const error = await response.json();
-      console.error("Currently playing error:", error);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
 
@@ -293,10 +243,9 @@ async function checkCurrentlyPlaying(token) {
 
     displayCurrentlyPlaying(data);
   } catch (error) {
-    console.error("Currently playing error:", error);
+    console.error("Error:", error);
     noTrackMessage.style.display = "block";
     trackInfo.style.display = "none";
-    showStatus("Error fetching playback info", true);
   }
 }
 
@@ -308,9 +257,8 @@ async function fetchCurrentlyPlaying(token) {
 }
 
 function displayCurrentlyPlaying(data) {
-  // Validate data structure
-  if (!data?.item || !data?.device) {
-    console.error("Invalid data structure:", data);
+  // Validate required data
+  if (!data?.item) {
     noTrackMessage.style.display = "block";
     trackInfo.style.display = "none";
     return;
@@ -332,30 +280,33 @@ function displayCurrentlyPlaying(data) {
   const trackImage = document.getElementById("trackImage");
   if (data.item.album?.images?.[0]?.url) {
     trackImage.src = data.item.album.images[0].url;
-    trackImage.alt = `${data.item.album.name} cover`;
   } else {
     trackImage.src = "";
-    trackImage.alt = "No album art available";
   }
 
   // Progress bar
   if (data.progress_ms && data.item.duration_ms) {
-    const progressPercent = Math.min(
-      100,
-      (data.progress_ms / data.item.duration_ms) * 100,
-    );
+    const progressPercent = (data.progress_ms / data.item.duration_ms) * 100;
     document.getElementById("progressBar").style.width = `${progressPercent}%`;
 
     // Time display
     const progressTime = document.getElementById("progressTime");
     const progressMinutes = Math.floor(data.progress_ms / 60000);
-    const progressSeconds = Math.floor((data.progress_ms % 60000) / 1000);
+    const progressSeconds = Math.floor((data.progress_ms % 60000) / 1000)
+      .toString()
+      .padStart(2, "0");
     const durationMinutes = Math.floor(data.item.duration_ms / 60000);
-    const durationSeconds = Math.floor((data.item.duration_ms % 60000) / 1000);
-    progressTime.textContent = `${progressMinutes}:${progressSeconds.toString().padStart(2, "0")} / ${durationMinutes}:${durationSeconds.toString().padStart(2, "0")}`;
+    const durationSeconds = Math.floor((data.item.duration_ms % 60000) / 1000)
+      .toString()
+      .padStart(2, "0");
+    progressTime.textContent = `${progressMinutes}:${progressSeconds} / ${durationMinutes}:${durationSeconds}`;
   }
 
-  // Device info
-  document.getElementById("deviceInfo").textContent =
-    `Playing on ${data.device?.name || "Unknown device"} (${data.device?.type || "Unknown type"})`;
+  // Device info - with null checks
+  const deviceInfoElement = document.getElementById("deviceInfo");
+  if (data.device) {
+    deviceInfoElement.textContent = `Playing on ${data.device.name || "Unknown device"} (${data.device.type || "Unknown type"})`;
+  } else {
+    deviceInfoElement.textContent = "Playing on unknown device";
+  }
 }
